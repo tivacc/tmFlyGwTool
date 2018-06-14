@@ -16,6 +16,7 @@ import win32gui
 import serial
 import serial.tools.list_ports
 import threading
+import pyHook
 from PIL import Image, ImageWin,ImageDraw,ImageFont
 
 reload(sys) 
@@ -52,28 +53,21 @@ class MSerialPort:
 			if data == '\r':
 				lock.acquire()  
 				if len(self.message) < 20 :  # the length of  router's address is 18 bytes
-					global rtAddrInfo
-					rtAddrInfo = ''
-					rtAddrInfo = self.message[:-1]
+					macAdrInfo.set(self.message[:-1])
 					self.message = ''
-					macAdrInfo.set(rtAddrInfo)
 				else :
-					global nbAddrInf0
-					nbAddrInf0 = ''
-					#nbAddrInf0 = self.message[:-1]
-					nbAddrInf0 = self.message[:15] + ':' + self.message[-20:-1]
+					nbAdrInfo.set(self.message[:15] + ':' + self.message[-20:-1])
 					self.message = ''
-					nbAdrInfo.set(nbAddrInf0)
 				lock.release()
 
-def printerList():
+def getPrinterList():
 	printerList = []
 	for printerItem in win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL, None, 1):
 		flags, desc, name, comment = printerItem
 		printerList.append(name.encode('utf-8'))
 	return printerList
 
-def serialList():
+def getSerialList():
 	serialList = []
 	serialArray = list(serial.tools.list_ports.comports())
 	for serialItem in serialArray:
@@ -82,6 +76,9 @@ def serialList():
 	 	serialList.append(serialName)
 
 	return serialList
+
+def handlerAdaptor(fun, **kwds):  
+    return lambda event,fun=fun,kwds=kwds: fun(event, **kwds)  	
 
 def sacnnerChosenEvent(event):
 	global scannerObj
@@ -94,16 +91,21 @@ def sacnnerChosenEvent(event):
 #devNo :zigbee网关序列号
 #rtDevNo :路由器MAC地址
 #nbDevNo :NB信息
-def print2Printer(devNo,rtDevNo,nbDevNo):
+def print2Printer(devType,devNo,rtDevNo,nbDevNo):
 	tempZgStringNo = devNo
 	tempRtStringNo = rtDevNo
 	tempNbStringNo = nbDevNo	
 
+	if devType == 1:
+		btnPrint1['text'] = '正在打印'
+	else :
+		btnPrint2['text'] = '正在打印'	
+
 	#deviceString = '智能网关'.decode('utf-8')
-	modelString = '型  号： '.decode('utf-8') + 'HA_1MGWA'
+	modelString = '品名：'.decode('utf-8') + 'HA_1MGWA'
 	ipString = 'IP地址：'.decode('utf-8') + '192.168.1.1'
 	userString = '用户名：'.decode('utf-8') + 'root'
-	powerString = '电源规格：'.decode('utf-8') + '12V--1A'
+	powerString = '电源规格：'.decode('utf-8') + '12V--2A'
 
 	zgSerialString= '序列号: '.decode('utf-8')  + tempZgStringNo
 	rtSerialString= 'MAC地址: '.decode('utf-8') + tempRtStringNo
@@ -148,10 +150,10 @@ def print2Printer(devNo,rtDevNo,nbDevNo):
 
 	a2 = ImageDraw.Draw(newImg1)
 	a2.ink = 0 + 0 * 256 + 0 * 256 * 256
-	a2.text((250,30),"合格证".decode('utf-8'),font=font3)
-	#a2.text((150,20),companyString,font=font2)
-
-	#a2.text((20,50),deviceString,font=font2)
+	if devType == 1:
+		a2.text((250,30),"智能网关".decode('utf-8'),font=font3)
+	else:
+		a2.text((250,30)," 双频智能网关".decode('utf-8'),font=font3)
 	a2.text((20,80),modelString,font=font2)
 
 	a2.text((20,110),ipString,font=font2)
@@ -181,6 +183,11 @@ def print2Printer(devNo,rtDevNo,nbDevNo):
 	hDC.EndDoc ()
 	hDC.DeleteDC ()
 
+	if devType == 1:
+		btnPrint1['text'] = '打印单频'
+	else :
+		btnPrint2['text'] = '打印双频'	
+
 	return
 
 
@@ -191,15 +198,8 @@ def btnChooseFirmWare(event):
 
 	return	
 
-
-def btnPrintDevInfo(event):
-
-	btnState['text'] = 'WAIT'
-	btnState['background'] = 'white'
-	root.update()
-
+def printDevInfoThreadCb(index):
 	toolPath  = ".\commander"
-
 	deviceName = 'EFR32' #mcuType
 
 	cmdGetDevInfo = toolPath + '\commander.exe device info --device ' + deviceName
@@ -208,17 +208,8 @@ def btnPrintDevInfo(event):
 	stateText.delete(0.0, Tkinter.END) 
 	stateText.insert(Tkinter.END,devinfo) 
 
-	lock.acquire()
-	global rtAddrInfo
-	global nbAddrInf0
-	rtDevInfo = rtAddrInfo
-	nbDevInfo = nbAddrInf0
-	
-	rtAddrInfo = ''
-	nbAddrInf0 = ''
-	macAdrInfo.set('')
-	nbAdrInfo.set('')
-	lock.release()
+	rtDevInfo = macAdrEntry.get()
+	nbDevInfo = nbAdrEntry.get()
 
 	if rtDevInfo=='':
 		printInfo = 'Warning:please read the address of router.'
@@ -232,7 +223,6 @@ def btnPrintDevInfo(event):
 		root.update()
 		return
 
-
 	if 'ERROR' in devinfo:
 		btnState['text'] = 'ERROR'
 		btnState['background'] = 'red'
@@ -243,30 +233,33 @@ def btnPrintDevInfo(event):
 		root.update()
 
 		devId = devinfo[-22:-6]
-		print2Printer(devId.upper(),rtDevInfo,nbDevInfo)
-
-	root.mainloop()
-
-	return
-
-
-def btnUnlockDev(event):
+		print2Printer(index,devId.upper(),rtDevInfo,nbDevInfo)
+	
+def btnPrintDevInfo(event,index):
 	btnState['text'] = 'WAIT'
 	btnState['background'] = 'white'
 	root.update()
 
+	printDevInfoThread = threading.Thread(target=printDevInfoThreadCb,args=(index,))
+	printDevInfoThread.start()
+
+	return
+
+
+def unLockThreadCb():
 	toolPath  = ".\commander"
-	#deviceName = mcuChosen.get()
 	deviceName = 'EFR32'      #mcuType
 
 	outputInfo = ''
 	cmdUnlockDev = toolPath + '\commander.exe device lock --debug disable --device ' + deviceName
 	unlockInfo=os.popen(cmdUnlockDev)  	#popen与system可以执行指令,popen可以接受返回对象  
 	unlockInfo=unlockInfo.read() 			#读取输出 
+	print(unlockInfo)
 	outputInfo = unlockInfo
 	stateText.delete(0.0, Tkinter.END)
 	stateText.insert(Tkinter.END,unlockInfo)
 
+	btnUnlock['text'] = '1解密'
 	if 'ERROR' in outputInfo:
 		btnState['text'] = 'ERROR'
 		btnState['background'] = 'red'
@@ -276,19 +269,20 @@ def btnUnlockDev(event):
 		btnState['background'] = 'green'
 		root.update()
 
-	root.mainloop()
-
-	return	
-
-
-def btnEraseDev(event):
+def btnUnlockDev(event):
 	btnState['text'] = 'WAIT'
 	btnState['background'] = 'white'
 	root.update()
 
-	toolPath  = ".\commander"
-	
-	#deviceName = mcuChosen.get()
+	btnUnlock['text'] = '1正在解密'
+
+	unLockThread = threading.Thread(target=unLockThreadCb)
+	unLockThread.start()
+
+	return	
+
+def eraseThreadCb():
+	toolPath  = ".\commander"	
 	deviceName = 'EFR32'      #mcuType
 
 	outputInfo = ''
@@ -300,6 +294,7 @@ def btnEraseDev(event):
 	stateText.delete(0.0, Tkinter.END)
 	stateText.insert(Tkinter.END,eraseInfo)
 
+	btnErase['text'] = '2擦除'
 	if 'ERROR' in outputInfo:
 		btnState['text'] = 'ERROR'
 		btnState['background'] = 'red'
@@ -309,26 +304,30 @@ def btnEraseDev(event):
 		btnState['background'] = 'green'
 		root.update()
 
-	root.mainloop()
-
-	return	
-
-
-
-def btnflashDev(event):
+def btnEraseDev(event):
 	btnState['text'] = 'WAIT'
 	btnState['background'] = 'white'
 	root.update()
 
+	btnErase['text'] = '2正在擦除'
+
+	eraseThread = threading.Thread(target=eraseThreadCb)
+	eraseThread.start()
+
+	return	
+
+def flashThreadCb():
 	toolPath  = ".\commander"
 	flashFilePath = firewareEntry.get()
 	if flashFilePath[-3:] != 'hex' and flashFilePath[-3:] != 'bin' :
 		btnState['text'] = 'ERROR'
 		btnState['background'] = 'red'
-		root.mainloop()
+
+		btnFlash['text'] = '3编程'
+
+		root.update()
 		return 
 
-	#deviceName = mcuChosen.get()
 	deviceName = 'EFR32'      #mcuType
 
 	outputInfo = ''
@@ -339,6 +338,7 @@ def btnflashDev(event):
 	stateText.delete(0.0, Tkinter.END)
 	stateText.insert(Tkinter.END,flashInfo)
 
+	btnFlash['text'] = '3编程'
 
 	if 'ERROR' in outputInfo:
 		btnState['text'] = 'ERROR'
@@ -349,19 +349,20 @@ def btnflashDev(event):
 		btnState['background'] = 'green'
 		root.update()
 
-	root.mainloop()
-
-	return	
-
-
-def btnLockDev(event):
+def btnflashDev(event):
 	btnState['text'] = 'WAIT'
 	btnState['background'] = 'white'
 	root.update()
 
+	btnFlash['text'] = '3正在编程'
+
+	flashThread = threading.Thread(target=flashThreadCb)
+	flashThread.start()
+
+	return	
+
+def lockThreadCb():
 	toolPath  = ".\commander"
-	
-	#deviceName = mcuChosen.get()
 	deviceName = 'EFR32'      #mcuType
 
 	outputInfo = ''
@@ -372,6 +373,8 @@ def btnLockDev(event):
 	stateText.delete(0.0, Tkinter.END)
 	stateText.insert(Tkinter.END,lockInfo)
 
+	btnLock['text'] = '4加密'
+
 	if 'ERROR' in outputInfo:
 		btnState['text'] = 'ERROR'
 		btnState['background'] = 'red'
@@ -381,55 +384,117 @@ def btnLockDev(event):
 		btnState['background'] = 'green'
 		root.update()
 
-	root.mainloop()
+def btnLockDev(event):
+	btnState['text'] = 'WAIT'
+	btnState['background'] = 'white'
+	root.update()
+
+	btnLock['text'] = '4正在加密'
+
+	lockThread = threading.Thread(target=lockThreadCb)
+	lockThread.start()
 
 	return	
+
+def OneKeyFlashThreadCb():
+	toolPath  = ".\commander"
+	deviceName = 'EFR32'      #mcuType
+
+	outputInfo = ''
+
+	cmdEraseDev = toolPath + '\commander.exe device masserase ' + '--device ' + deviceName
+	eraseInfo=os.popen(cmdEraseDev)  	#popen与system可以执行指令,popen可以接受返回对象  
+	eraseInfo=eraseInfo.read() 			#读取输出 
+	outputInfo = outputInfo+eraseInfo
+	stateText.delete(0.0, Tkinter.END)
+	stateText.insert(Tkinter.END,eraseInfo)
+
+	flashFilePath = firewareEntry.get()
+	if flashFilePath[-3:] != 'hex' and flashFilePath[-3:] != 'bin' :
+		btnState['text'] = 'ERROR'
+		btnState['background'] = 'red'
+
+		btnOneKeyFlash['text'] = '一键编程\r如需单步操作，见下方'
+
+		root.update()
+		return 
+
+	cmdFlashDev = toolPath + '\commander.exe flash ' + flashFilePath + ' --address 0x0 --device ' + deviceName
+	flashInfo=os.popen(cmdFlashDev)  	#popen与system可以执行指令,popen可以接受返回对象  
+	flashInfo=flashInfo.read() 			#读取输出 
+	outputInfo = outputInfo+flashInfo
+	stateText.insert(Tkinter.END,flashInfo)
+
+	'''
+	cmdLockDev = toolPath + '\commander.exe device lock --debug enable --device ' + deviceName
+	lockInfo=os.popen(cmdLockDev)  	#popen与system可以执行指令,popen可以接受返回对象  
+	lockInfo=lockInfo.read() 			#读取输出 
+	outputInfo = outputInfo+lockInfo
+	stateText.insert(Tkinter.END,lockInfo)
+	'''
+
+	btnOneKeyFlash['text'] = '一键编程\r如需单步操作，见下方'
+
+	if 'ERROR' in outputInfo:
+		btnState['text'] = 'ERROR'
+		btnState['background'] = 'red'
+		root.update()
+	else :
+		btnState['text'] = 'PASS'
+		btnState['background'] = 'green'
+		root.update()
+
+def btnOneKeyFlashDev(event):
+	btnState['text'] = 'WAIT'
+	btnState['background'] = 'white'
+	root.update()
+
+	btnOneKeyFlash['text'] = '正在编程'
+	OneKeyFlashThread = threading.Thread(target=OneKeyFlashThreadCb)
+	OneKeyFlashThread.start()
+
+	return
+
+def keyBoardFlashThreadCb():
+	btnOneKeyFlashDev(None)
+
+def keyDownEvent(event):
+	if event.Ascii == 32:
+		keyBoardFlashThread = threading.Thread(target=keyBoardFlashThreadCb)
+		keyBoardFlashThread.start()
+
+	return True
 
 def closeWindow():
 	if scannerChosen.get():
 		global scannerObj
 		scannerObj.port_close()
-
-	print("exit.")
 	os._exit(0)
-	#root.destroy()
-	#sys.exit(0)
 
-global root
+
 root = Tkinter.Tk()                     # 创建窗口对象的背景色
 root.title('条码工具')
 root.geometry('800x600+500+300')
 root.resizable(False, False)
-#root.wm_attributes('-topmost',1)
 root.attributes('-topmost',1)
 
 printLabel=Tkinter.Label(root,text='请选择连接的打印机型号：', font=(10))
 printLabel.place(x = 50, y = 30)
 
-printerList=printerList()
+printerList=getPrinterList()
 printerType=Tkinter.StringVar()
 printerChosen=ttk.Combobox(root, width=12, textvariable=printerType)
 printerChosen['values']=printerList
 printerChosen.place(x = 300, y = 30) 
-defaultPrintName = win32print.GetDefaultPrinter().encode('utf-8')
-printIndex = 0
-for item in printerList:	
-	if item == defaultPrintName:
-		break
-
-	printIndex = printIndex + 1	
-printerChosen.current(printIndex)    					 	# 设置下拉列表默认显示的值
-
 
 scannerLabel=Tkinter.Label(root,text='请选择连接的扫码枪接口：', font=(10))
 scannerLabel.place(x = 50, y = 80) 
 
-scannerList = serialList()
+scannerList = getSerialList()
 scannerType = Tkinter.StringVar()
 scannerChosen = ttk.Combobox(root, width=12, textvariable=scannerType)
 scannerChosen['values'] = scannerList
 scannerChosen.place(x = 300, y = 80)
-#scannerChosen.current(0)
 scannerChosen.bind("<<ComboboxSelected>>",sacnnerChosenEvent)
 
 
@@ -451,13 +516,20 @@ nbAdrEntry.place(x = 430, y = 130)
 firewareLabel=Tkinter.Label(root,text='网关烧录的固件：',font=(10))
 firewareLabel.place(x = 50, y = 180)
 fileInfo = Tkinter.StringVar() 
-#firewareEntry = Entry(root,text = '')
 firewareEntry = Tkinter.Entry(root,textvariable=fileInfo,width = 35)
 firewareEntry['state'] = 'readonly'
 firewareEntry.place(x = 180, y = 180)
 firewareBtn = Tkinter.Button(root,text = '选择固件',height = 1)
 firewareBtn.place(x = 450, y = 175)
 firewareBtn.bind("<Button-1>", btnChooseFirmWare)
+
+btnOneKeyFlash = Tkinter.Button(root,text = '一键编程\r如需单步操作，见下方',width = 20,height = 4)
+btnOneKeyFlash.place(x = 550,y = 160)
+btnOneKeyFlash.bind("<Button-1>", btnOneKeyFlashDev)
+
+keyBoardHook = pyHook.HookManager()
+keyBoardHook.SubscribeKeyDown(keyDownEvent)
+keyBoardHook.HookKeyboard()
 
 stateText = Tkinter.Text(root, height=17, width=100)
 stateText.place(x = 50, y = 230)
@@ -467,23 +539,27 @@ btnState = Tkinter.Button(root,text='WAIT',width = 40 ,height = 6)
 btnStateText.set('WAIT')
 btnState.place(x = 50,y = 470)
 
-btnPrint = Tkinter.Button(root,text = '打印',width = 15,height = 3)
-btnPrint.place(x = 380,y = 475)
-btnPrint.bind("<Button-1>", btnPrintDevInfo)
+btnPrint1 = Tkinter.Button(root,text = '打印单频',width = 15,height = 3)
+btnPrint1.place(x = 380,y = 475)
+btnPrint1.bind("<Button-1>", handlerAdaptor(btnPrintDevInfo, index=1))
 
-btnUnlock= Tkinter.Button(root,text = '解密',width = 8,height = 1)
+btnPrint2 = Tkinter.Button(root,text = '打印双频',width = 15,height = 3)
+btnPrint2.place(x = 380,y = 530)
+btnPrint2.bind("<Button-1>", handlerAdaptor(btnPrintDevInfo, index=2))
+
+btnUnlock= Tkinter.Button(root,text = '1解密',width = 8,height = 1)
 btnUnlock.place(x = 530,y = 475)
 btnUnlock.bind("<Button-1>", btnUnlockDev)
 
-btnErase = Tkinter.Button(root,text = '擦除',width = 8,height = 1)
+btnErase = Tkinter.Button(root,text = '2擦除',width = 8,height = 1)
 btnErase.place(x = 620,y = 475)
 btnErase.bind("<Button-1>", btnEraseDev)
 
-btnFlash = Tkinter.Button(root,text = '编程',width = 8,height = 1)
+btnFlash = Tkinter.Button(root,text = '3编程',width = 8,height = 1)
 btnFlash.place(x = 530,y = 515)
 btnFlash.bind("<Button-1>", btnflashDev)
 
-btnLock = Tkinter.Button(root,text = '加密',width = 8,height = 1)
+btnLock = Tkinter.Button(root,text = '4加密',width = 8,height = 1)
 btnLock.place(x = 620,y = 515)
 btnLock.bind("<Button-1>", btnLockDev)
 
@@ -492,4 +568,3 @@ try:
 	root.mainloop()								# 进入消息循环
 except Exception as e:
 	os._exit(0)
-
